@@ -8,6 +8,9 @@
 #include <Arduino.h>
 #include "BLEDevice.h"
 //#include "BLEScan.h"
+#include <BLEUtils.h>
+#include <BLEServer.h>
+
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
@@ -22,6 +25,22 @@ const String sketchName = "ESP32_HRM_1";
 static BLEUUID serviceUUID(BLEUUID((uint16_t)0x180D));
 // The HRM characteristic of the remote service we are interested in.
 static BLEUUID charUUID(BLEUUID((uint16_t)0x2A37));
+
+
+// See the following for generating UUIDs:
+// https://www.uuidgenerator.net/
+
+//#define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+#define UUID_FTMS "00001826-0000-1000-8000-00805f9b34fb"
+//#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+#define UUID_HRS "0000180d-0000-1000-8000-00805f9b34fb"
+#define UUID_HRM_MEAS "00002a37-0000-1000-8000-00805f9b34fb"
+#define UUID_HRM_LOC "00002a38-0000-1000-8000-00805f9b34fb"
+
+#define UUID_INDOOR "00002ad2-0000-1000-8000-00805f9b34fb"
+
+
+BLECharacteristic *pCharHRM = nullptr;
 
 static boolean doConnect = false;
 static boolean connected = false;
@@ -47,7 +66,7 @@ typedef struct {
   char ID[20];
   uint16_t HRM;
 } HRM;
- HRM hrm;
+HRM hrm;
 
 //--------------------------------------------------------------------------------------------
 // Setup the Serial Port and output Sketch name and compile date
@@ -264,7 +283,37 @@ void setup() {
   mqtt.setCallback(callback);
 
   // Start BLE
-  BLEDevice::init("");
+  BLEDevice::init("ESP32_BLE_daum");
+
+
+  // start BLE Server
+  BLEServer *pServer = BLEDevice::createServer();
+
+  // ── FTMS ──────────────────────────────────────────────────
+  BLEService *pService = pServer->createService(UUID_FTMS);
+  pServer->advertiseOnDisconnect(true);
+
+  pService->start();
+
+  // ── HRS ───────────────────────────────────────────────────
+  BLEService *pServHRS = pServer->createService(UUID_HRS);
+
+  BLECharacteristic *pCharHRMLoc = pServHRS->createCharacteristic(UUID_HRM_LOC, BLECharacteristic::PROPERTY_READ);
+  uint8_t hl = 1; 
+  pCharHRMLoc->setValue(&hl, 1);
+
+  pCharHRM = pServHRS->createCharacteristic(UUID_HRM_MEAS, BLECharacteristic::PROPERTY_NOTIFY);
+
+  pServHRS->start();
+
+  // BLEAdvertising *pAdvertising = pServer->getAdvertising();  // this still is working for backward compatibility
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(UUID_FTMS);
+  pAdvertising->setScanResponse(true);
+  pAdvertising->setMinPreferred(0x06);  // functions that help with iPhone connections issue
+  pAdvertising->setMaxPreferred(0x12);
+  BLEDevice::startAdvertising();
+  Serial.println("Characteristic defined! Now you can read it in your phone!");
 
   // Retrieve a Scanner and set the callback we want to use to be informed when we
   // have detected a new device.  Specify that we want active scanning and start the
@@ -317,9 +366,13 @@ void loop() {
     // Client connected
     mqtt.loop();
   }
-  
+
   sendHRMData();
-    sendMqttStats();
+  //  sendMqttStats();
+
+  uint8_t buf[2] = { 0x00, hrm.HRM };
+  pCharHRM->setValue(buf, 2);
+  pCharHRM->notify();
 
   delay(1000);  // Delay a second between loops.
 }  // End of loop
